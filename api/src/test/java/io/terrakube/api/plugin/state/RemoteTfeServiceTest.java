@@ -700,8 +700,70 @@ class RemoteTfeServiceTest {
         TagBindingList bindings = fixture.service.listTagBindings(response.getData().getId(), fixture.currentUser);
         assertEquals(List.of(Map.of("key", "env", "value", "prod"), Map.of("key", "legacy", "value", "")),
                 bindings.getData().stream().map(TagBindingModel::getAttributes).toList());
+        assertEquals(ExecutionMode.remote, saved.get().getExecutionMode());
         // A single workspace resolves only its own tags, not every tag of the organization
         verify(tagRepository, never()).findByOrganizationName(anyString());
+    }
+
+    @Test
+    void createWorkspaceSetsExecutionMode() {
+        TagFixture fixture = new TagFixture();
+        AtomicReference<Workspace> saved = new AtomicReference<>();
+        when(workspaceRepository.save(any(Workspace.class))).thenAnswer(invocation -> {
+            Workspace created = invocation.getArgument(0);
+            created.setId(UUID.randomUUID());
+            created.setAccess(Collections.emptyList());
+            saved.set(created);
+            return created;
+        });
+        when(workspaceRepository.getByOrganizationNameAndName("sample-org", "local-ws"))
+                .thenAnswer(invocation -> saved.get());
+        when(workspaceRepository.findById(any(UUID.class)))
+                .thenAnswer(invocation -> Optional.ofNullable(saved.get()));
+
+        WorkspaceModel model = new WorkspaceModel();
+        model.setAttributes(new HashMap<>(Map.of("name", "local-ws", "execution-mode", "local")));
+        WorkspaceData request = new WorkspaceData();
+        request.setData(model);
+
+        fixture.service.createWorkspace("sample-org", request, fixture.currentUser);
+        assertEquals(ExecutionMode.local, saved.get().getExecutionMode());
+    }
+
+    @Test
+    void createWorkspaceFallsBackToOrganizationExecutionModeWhenOmittedOrUnknown() {
+        TagFixture fixture = new TagFixture();
+        fixture.organization.setExecutionMode(ExecutionMode.local);
+        AtomicReference<Workspace> saved = new AtomicReference<>();
+        when(workspaceRepository.save(any(Workspace.class))).thenAnswer(invocation -> {
+            Workspace created = invocation.getArgument(0);
+            created.setId(UUID.randomUUID());
+            created.setAccess(Collections.emptyList());
+            saved.set(created);
+            return created;
+        });
+        when(workspaceRepository.getByOrganizationNameAndName(Mockito.eq("sample-org"), anyString()))
+                .thenAnswer(invocation -> saved.get());
+        when(workspaceRepository.findById(any(UUID.class)))
+                .thenAnswer(invocation -> Optional.ofNullable(saved.get()));
+
+        // 1. Missing execution-mode attribute falls back to organization default
+        WorkspaceModel missingAttrModel = new WorkspaceModel();
+        missingAttrModel.setAttributes(new HashMap<>(Map.of("name", "omitted-mode-ws")));
+        WorkspaceData missingRequest = new WorkspaceData();
+        missingRequest.setData(missingAttrModel);
+
+        fixture.service.createWorkspace("sample-org", missingRequest, fixture.currentUser);
+        assertEquals(ExecutionMode.local, saved.get().getExecutionMode());
+
+        // 2. Unknown execution-mode attribute (e.g. TFE "agent") logs warning and falls back to organization default
+        WorkspaceModel unknownAttrModel = new WorkspaceModel();
+        unknownAttrModel.setAttributes(new HashMap<>(Map.of("name", "unknown-mode-ws", "execution-mode", "agent")));
+        WorkspaceData unknownRequest = new WorkspaceData();
+        unknownRequest.setData(unknownAttrModel);
+
+        fixture.service.createWorkspace("sample-org", unknownRequest, fixture.currentUser);
+        assertEquals(ExecutionMode.local, saved.get().getExecutionMode());
     }
 
     @Test

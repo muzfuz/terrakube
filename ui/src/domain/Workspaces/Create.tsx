@@ -444,7 +444,7 @@ export const CreateWorkspace = () => {
               branch: values.branch,
               iacType: iacType.id,
               defaultTemplate: values.defaultTemplate,
-              executionMode: executionMode,
+              executionMode: executionMode || "remote",
             },
             relationships: {},
           },
